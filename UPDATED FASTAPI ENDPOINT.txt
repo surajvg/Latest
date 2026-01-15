@@ -158,3 +158,30 @@ const res = await axios.get(
 setAdditionalDetails(res.data);
 
 
+###########################################################################
+
+if (currentIQty === 0) {
+  updatedRows[index].valuation = "Accepted";
+} else {
+  updatedRows[index].valuation =
+    updatedRows[index].rejectedQty > 0 ? "Rejected" : "Accepted";
+}
+
+###########################################################################
+
+const formattedRows = rows1.map((row) => ({
+  MIC_No: Number(row.micNo ?? 0),
+  MIC: row.mic ?? "",
+  MIC_Desc: row.description ?? "",
+  Sampling_Procedure: row.sampling ?? "",
+  Sampling_Qty: Number(row.sQty ?? 0),
+  Inspected_Qty: Number(row.iQty ?? 0),
+  SampleNo: Number(row.sampleNo ?? 0),
+  Accepted_Qty: Number(row.acceptedQty ?? 0),
+  Rejected_Qty: Number(row.rejectedQty ?? 0),
+  Valuation: row.valuation ?? "Accepted",
+}));
+############################################################################
+newValue = value === "" ? "" : Number(value);
+
+
