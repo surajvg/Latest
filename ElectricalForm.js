@@ -1,0 +1,750 @@
+
+import React, { useState, useEffect } from "react";
+import axios from "axios";
+import {
+    Box,
+    Button,
+    Divider,
+    Card,
+    MenuItem,
+    Grid,
+    Paper,
+    Table,
+    TableBody,
+    TableCell,
+    TableContainer,
+    TableHead,
+    TableRow,
+    TextField,
+    Typography,
+} from "@mui/material";
+import AddBoxIcon from '@mui/icons-material/AddBox';
+import AddIcon from "@mui/icons-material/Add";
+import DeleteIcon from "@mui/icons-material/Delete";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import SaveIcon from "@mui/icons-material/Save";
+import BuildIcon from "@mui/icons-material/Build"; // Add Instrument
+import AddCircleIcon from "@mui/icons-material/AddCircle";
+
+
+function ElectricalForm({ sampleCount = 5, onSummaryChange }) {
+    const TOLERANCE = 0.3;
+
+    const [rows, setRows] = useState([
+        {
+            slno: 1,
+            instrument: "",
+            basicDimension: "",
+            min: "",
+            max: "",
+            observed: Array(sampleCount).fill(""),
+        },
+    ]);
+
+    const [basicDimensions, setBasicDimensions] = useState([]);
+    const [inspectorSignature, setInspectorSignature] = useState(null);
+    const [approverSignature, setApproverSignature] = useState(null);
+    const [showResults, setShowResults] = useState(false);
+    const [showInstrumentTable, setShowInstrumentTable] = useState(false);
+
+    const [instrumentRows, setInstrumentRows] = useState([
+        {
+            slno: 1,
+            instrumentType: "",
+            uniqueId: "",
+            accuracy: ""
+        }
+    ]);
+
+    const [form, setForm] = useState({
+        partNumber: "",
+        mpn: "",
+        batchNo: "",
+        totalQty: "",
+        category: "",
+    });
+
+    useEffect(() => {
+        // Dummy data for dimensions
+        setBasicDimensions([
+            { instrumentName: "Vernier Caliper", dimension: 50.0 },
+            { instrumentName: "Scale", dimension: 75.0 },
+            { instrumentName: "Tape", dimension: 25.0 },
+        ]);
+    }, []);
+
+    useEffect(() => {
+        if (onSummaryChange) {
+            onSummaryChange(getSummary());
+        }
+    }, [rows]); // triggers when rows update
+
+    // Update observed array if sampleCount changes
+    useEffect(() => {
+        setRows((prev) =>
+            prev.map((r) => ({
+                ...r,
+                observed: Array(sampleCount)
+                    .fill("")
+                    .map((_, i) => r.observed[i] || ""),
+            }))
+        );
+    }, [sampleCount]);
+
+    const handleChange = (index, field, value, obsIndex = null) => {
+        const regex = /^\d*\.?\d{0,2}$/;
+        setRows((prev) => {
+            const newRows = [...prev];
+            const row = { ...newRows[index] };
+
+            if (field === "basicDimension") {
+                if (value === "" || regex.test(value)) {
+                    row.basicDimension = value;
+                    if (value) {
+                        const numVal = parseFloat(value);
+                        row.min = (numVal - TOLERANCE).toFixed(2);
+                        row.max = (numVal + TOLERANCE).toFixed(2);
+                    } else {
+                        row.min = "";
+                        row.max = "";
+                    }
+                }
+            } else if (field === "observed" && obsIndex !== null) {
+                if (value === "" || regex.test(value)) {
+                    const updatedObserved = [...row.observed];
+                    updatedObserved[obsIndex] = value;
+                    row.observed = updatedObserved;
+                }
+            } else {
+                if (value === "" || regex.test(value)) {
+                    row[field] = value;
+                }
+            }
+
+            newRows[index] = row;
+            return newRows;
+        });
+    };
+
+    const handleAddRow = () => {
+        setRows((prev) => [
+            ...prev,
+            {
+                slno: prev.length + 1,
+                instrument: "",
+                basicDimension: "",
+                min: "",
+                max: "",
+                observed: Array(sampleCount).fill(""),
+            },
+        ]);
+    };
+
+    const handleDeleteRow = () => {
+        setRows((prev) => {
+            if (prev.length === 1) return prev; // prevent deleting last row
+            return prev.slice(0, -1);
+        });
+    };
+
+    const handleSignatureUpload = (event, type) => {
+        const file = event.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                if (type === "inspector") setInspectorSignature(reader.result);
+                else setApproverSignature(reader.result);
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
+    const handleSave = async () => {
+        try {
+            const response = await axios.post("/api/dimensional-inspection", { rows });
+            alert("Data saved successfully!");
+            console.log(response.data);
+        } catch (error) {
+            console.error("Error saving data:", error);
+            alert("Failed to save data.");
+        }
+    };
+
+    // Compute inspection results for each sample
+    const getInspectionResults = () => {
+        const results = [];
+        rows.forEach((row) => {
+            const { slno, min, max, observed } = row;
+            if (!min || !max) return;
+            observed.forEach((val, idx) => {
+                if (val === "") return;
+                const numVal = parseFloat(val);
+                const status =
+                    numVal >= parseFloat(min) && numVal <= parseFloat(max)
+                        ? "Accepted"
+                        : "Rejected";
+                results.push({
+                    sample: `Row ${slno} - Sample ${idx + 1}`,
+                    value: numVal,
+                    status,
+                });
+            });
+        });
+        return results;
+    };
+
+    const getSummary = () => {
+        const results = getInspectionResults();
+        let accepted = 0;
+        let rejected = 0;
+        results.forEach((r) => {
+            r.status === "Accepted" ? accepted++ : rejected++;
+        });
+        return { accepted, rejected };
+    };
+
+    const isRejectedValue = (val, min, max) => {
+        if (val === "") return false;
+        const numVal = parseFloat(val);
+        return numVal < parseFloat(min) || numVal > parseFloat(max);
+    };
+
+    const [showMarkingTable, setShowMarkingTable] = useState(false);
+
+
+    return (
+        <Grid item xs={12}>
+            <Divider sx={{ my: 1 }} />
+            <Box p={2} sx={{ backgroundColor: "#fff" }}>
+                <Typography
+                    variant="h6"
+                    align="center"
+                    sx={{ fontWeight: "bold", mb: 2, textDecoration: "underline" }}
+                >
+                    ELECTRICAL INSPECTION REPORT
+                </Typography>
+
+
+
+                {/* <Typography sx={{ mt: 2, fontWeight: "bold" }}>
+          Required Value : ± {TOLERANCE} mm
+        </Typography> */}
+
+
+
+                {/* Main Table with Add/Delete/View Row */}
+                <TableContainer component={Paper} sx={{ border: "1px solid black", mt: 2 }}>
+                    <Table size="small">
+                        <TableHead>
+                            <TableRow>
+                                <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold", fontFamily: 'Times New Roman' }}>SL No</TableCell>
+                                <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold", fontFamily: 'Times New Roman' }}>Basic Dimension</TableCell>
+                                <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold", fontFamily: 'Times New Roman' }}>Min</TableCell>
+                                <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold", fontFamily: 'Times New Roman' }}>Max</TableCell>
+                                {Array.from({ length: sampleCount }, (_, i) => (
+                                    <TableCell key={i} sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold" }}>{i + 1}</TableCell>
+                                ))}
+                                <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold", fontFamily: 'Times New Roman' }}>Actions</TableCell>
+                            </TableRow>
+                        </TableHead>
+
+                        <TableBody>
+                            {rows.map((row, i) => (
+                                <TableRow key={i}>
+                                    <TableCell sx={{ border: "1px solid black", textAlign: "center", fontFamily: 'Times New Roman' }}>{i + 1}</TableCell>
+                                    <TableCell sx={{ border: "1px solid black", fontFamily: 'Times New Roman' }}>
+                                        <TextField
+                                            select
+                                            variant="standard"
+                                            fullWidth
+                                            value={row.basicDimension}
+                                            onChange={(e) => handleChange(i, "basicDimension", e.target.value)}
+                                            SelectProps={{ native: true }}
+                                        >
+                                            <option value="">Select Dimension</option>
+                                            {basicDimensions.map((d, idx) => (
+                                                <option key={idx} value={d.dimension}>{d.dimension}</option>
+                                            ))}
+                                        </TextField>
+                                    </TableCell>
+
+                                    <TableCell sx={{ border: "1px solid black", textAlign: "center", fontFamily: 'Times New Roman' }}>{row.min}</TableCell>
+                                    <TableCell sx={{ border: "1px solid black", textAlign: "center", fontFamily: 'Times New Roman' }}>{row.max}</TableCell>
+
+                                    {row.observed.map((val, j) => (
+                                        <TableCell
+                                            key={j}
+                                            sx={{
+                                                border: "1px solid black",
+                                                backgroundColor: isRejectedValue(val, row.min, row.max) ? "#ffcccc" : "#ffffff",
+                                            }}
+                                        >
+                                            <TextField
+                                                variant="standard"
+                                                fullWidth
+                                                value={val}
+                                                onChange={(e) => handleChange(i, "observed", e.target.value, j)}
+                                            />
+                                        </TableCell>
+                                    ))}
+
+                                    {/* Actions for Add/Delete Row */}
+                                    <TableCell sx={{ border: "1px solid black", textAlign: "center", fontFamily: 'Times New Roman' }}>
+                                        <AddCircleIcon
+                                            sx={{ color: "green", cursor: "pointer", fontSize: 30 }}
+                                            onClick={() => {
+                                                const updated = [...rows];
+                                                updated.splice(i + 1, 0, {
+                                                    slno: i + 2,
+                                                    instrument: "",
+                                                    basicDimension: "",
+                                                    min: "",
+                                                    max: "",
+                                                    observed: Array(sampleCount).fill(""),
+                                                });
+                                                const normalized = updated.map((r, idx) => ({ ...r, slno: idx + 1 }));
+                                                setRows(normalized);
+                                            }}
+                                        />
+                                        <DeleteIcon
+                                            sx={{
+                                                color: "red",
+                                                cursor: rows.length > 1 ? "pointer" : "not-allowed",
+                                                opacity: rows.length > 1 ? 1 : 0.4,
+                                                fontSize: 30
+                                            }}
+                                            onClick={() => {
+                                                if (rows.length === 1) return;
+                                                const updated = rows.filter((_, idx) => idx !== i);
+                                                const normalized = updated.map((r, idx) => ({ ...r, slno: idx + 1 }));
+                                                setRows(normalized);
+                                            }}
+                                        />
+                                        <VisibilityIcon
+                                            sx={{ color: "blue", cursor: "pointer", fontSize: 30, ml: 1 }}
+                                            onClick={() => setShowResults(prev => !prev)}
+                                        />
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </TableContainer>
+
+
+
+
+                <Box mb={2} display="flex" justifyContent="flex-end" gap={3} sx={{ mt: 2 }}>
+
+
+
+                    <Button variant="contained" style={{ width: "10rem", backgroundColor: 'aliceblue', color: 'black' }}
+                        startIcon={<SaveIcon />} onClick={handleSave}>
+                        Save
+                    </Button>
+
+
+                    {/* Instrument Button  Code */}
+                    <Button variant="contained" style={{ width: "12rem", backgroundColor: 'aliceblue', color: 'black' }}
+                        startIcon={<BuildIcon />} onClick={() => setShowInstrumentTable(prev => !prev)}>
+                        Instrument
+                    </Button>
+                    <Button
+            variant="contained"
+            style={{ width: "14rem", backgroundColor: 'aliceblue', color: 'black' }}
+            startIcon={<BuildIcon />}
+            onClick={() => setShowMarkingTable(prev => !prev)}
+          >
+            Additional Details
+          </Button>
+
+                </Box>
+
+                {/* Instrument Code */}
+                {showInstrumentTable && (
+                    <Box mt={4}>
+                        <Typography variant="h6" sx={{ fontWeight: "bold", mb: 1 }}>
+                            Instrument Registration
+                        </Typography>
+
+                        <TableContainer component={Paper} sx={{ border: "1px solid black" }}>
+                            <Table size="small">
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold" }}>SL No</TableCell>
+                                        <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold" }}>Instrument Type</TableCell>
+                                        <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold" }}>Unique ID</TableCell>
+                                        <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold" }}>Measurement Accuracy</TableCell>
+                                        <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold" }}>Actions</TableCell>
+                                    </TableRow>
+                                </TableHead>
+
+                                <TableBody>
+                                    {instrumentRows.map((row, index) => (
+                                        <TableRow key={index}>
+                                            {/* SL No */}
+                                            <TableCell sx={{ border: "1px solid black", textAlign: "center" }}>
+                                                {index + 1}
+                                            </TableCell>
+
+                                            {/* Instrument Type */}
+                                            <TableCell sx={{ border: "1px solid black" }}>
+                                                <TextField
+                                                    select
+                                                    variant="standard"
+                                                    fullWidth
+                                                    value={row.instrumentType}
+                                                    onChange={(e) => {
+                                                        const updated = [...instrumentRows];
+                                                        updated[index].instrumentType = e.target.value;
+                                                        setInstrumentRows(updated);
+                                                    }}
+                                                    SelectProps={{ native: true }}
+                                                >
+                                                    <option value="">Select</option>
+                                                    <option value="Vernier Caliper">Vernier Caliper</option>
+                                                    <option value="Scale">Scale</option>
+                                                    <option value="Tape">Tape</option>
+                                                </TextField>
+                                            </TableCell>
+
+                                            {/* Unique ID */}
+                                            <TableCell sx={{ border: "1px solid black" }}>
+                                                <TextField
+                                                    variant="standard"
+                                                    fullWidth
+                                                    value={row.uniqueId}
+                                                    onChange={(e) => {
+                                                        const updated = [...instrumentRows];
+                                                        updated[index].uniqueId = e.target.value;
+                                                        setInstrumentRows(updated);
+                                                    }}
+                                                />
+                                            </TableCell>
+
+                                            {/* Accuracy */}
+                                            <TableCell sx={{ border: "1px solid black" }}>
+                                                <TextField
+                                                    variant="standard"
+                                                    fullWidth
+                                                    value={row.accuracy}
+                                                    onChange={(e) => {
+                                                        const updated = [...instrumentRows];
+                                                        updated[index].accuracy = e.target.value;
+                                                        setInstrumentRows(updated);
+                                                    }}
+                                                />
+                                            </TableCell>
+
+                                            {/* Actions */}
+                                            <TableCell sx={{ border: "1px solid black", textAlign: "center" }}>
+                                                {/* Add Row Icon */}
+                                                <AddCircleIcon
+                                                    sx={{
+                                                        color: "green",
+                                                        cursor: "pointer",
+                                                        fontSize: 28,
+                                                        mr: 1
+                                                    }}
+                                                    onClick={() => {
+                                                        const updated = [...instrumentRows];
+                                                        updated.splice(index + 1, 0, {
+                                                            slno: index + 2,
+                                                            instrumentType: "",
+                                                            uniqueId: "",
+                                                            accuracy: ""
+                                                        });
+
+                                                        // Recalculate SL No
+                                                        const normalized = updated.map((r, i) => ({
+                                                            ...r,
+                                                            slno: i + 1,
+                                                        }));
+
+                                                        setInstrumentRows(normalized);
+                                                    }}
+                                                />
+
+                                                {/* Delete Row Icon */}
+                                                <DeleteIcon
+                                                    sx={{
+                                                        color: "red",
+                                                        cursor: instrumentRows.length > 1 ? "pointer" : "not-allowed",
+                                                        opacity: instrumentRows.length > 1 ? 1 : 0.4,
+                                                        fontSize: 26
+                                                    }}
+                                                    onClick={() => {
+                                                        if (instrumentRows.length === 1) return;
+
+                                                        const updated = instrumentRows.filter((_, i) => i !== index);
+
+                                                        const normalized = updated.map((r, i) => ({
+                                                            ...r,
+                                                            slno: i + 1
+                                                        }));
+
+                                                        setInstrumentRows(normalized);
+                                                    }}
+                                                />
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+                    </Box>
+                )}
+
+                {showMarkingTable && (
+                    <Card
+                        sx={{
+                            p: 4,
+                            mt: 4,
+                            width: "100%",
+                            border: "1px solid #cfcfcf",
+                            boxShadow: "0px 3px 10px rgba(0,0,0,0.1)",
+                            borderRadius: "12px",
+                            background: "linear-gradient(to bottom, #fafafa, #ffffff)",
+                        }}
+                    >
+                        <Typography
+                            variant="h6"
+                            sx={{
+                                fontWeight: "bold",
+                                mb: 3,
+                                textDecoration: "underline",
+                                fontFamily: "Times New Roman",
+                                color: "#0d47a1",
+                            }}
+                        >
+                            Remarks
+                        </Typography>
+
+                        
+                        
+
+                           {/* REMARK SECTION - UPDATED */}
+
+
+  {/* Electrical Inspection Remark */}
+  <Box sx={{ mb: 3 }}>
+    <Typography
+      sx={{
+        fontWeight: "bold",
+        fontFamily: "Times New Roman",
+        color: "#1a237e",
+        mb: 1,
+      }}
+    >
+      Electrical Inspection Remark :
+    </Typography>
+    <TextField
+      fullWidth
+      multiline
+      rows={2}
+      placeholder="Enter electrical inspection remark"
+      variant="outlined"
+    />
+  </Box>
+
+  {/* FORM CONTENT IN SYSTEMATIC ORDER */}
+  <Grid container spacing={3}>
+
+    {/* Electrical Parameter */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        Electrical Parameter :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="NA">NA</MenuItem>
+        <MenuItem value="OK">OK</MenuItem>
+        <MenuItem value="NOT OK">NOT OK</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* Functional */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        Functional :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="NA">NA</MenuItem>
+        <MenuItem value="OK">OK</MenuItem>
+        <MenuItem value="NOT OK">NOT OK</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* Dimensions */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        Dimensions :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="NA">NA</MenuItem>
+        <MenuItem value="OK">OK</MenuItem>
+        <MenuItem value="NOT OK">NOT OK</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* Visual Inspection */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        Visual Inspection :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="NA">NA</MenuItem>
+        <MenuItem value="OK">OK</MenuItem>
+        <MenuItem value="NOT OK">NOT OK</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* COC */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        COC :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="received">Received</MenuItem>
+        <MenuItem value="not_received">Not Received</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* Test Report */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        Test Report :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="received">Received</MenuItem>
+        <MenuItem value="not_received">Not Received</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* Imported Document */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        Imported Document Received :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="received">Received</MenuItem>
+        <MenuItem value="not_received">Not Received</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* Malware Certificate */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        Malware Free Certificate :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="received">Received</MenuItem>
+        <MenuItem value="not_received">Not Received</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* FOD Check */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        FOD Check :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="yes">Yes</MenuItem>
+        <MenuItem value="no">No</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* Counterfeit */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        Counterfeit Checked :
+      </Typography>
+      <TextField fullWidth select defaultValue="" variant="outlined">
+        <MenuItem value="yes">Yes</MenuItem>
+        <MenuItem value="no">No</MenuItem>
+      </TextField>
+    </Grid>
+
+    {/* Shelf Life */}
+    <Grid item xs={12} md={6}>
+      <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+        Shelf Lifetime Date :
+      </Typography>
+
+      <Box sx={{ display: "flex", gap: 2 }}>
+        <TextField
+          type="date"
+          fullWidth
+          label="MFG Date"
+          InputLabelProps={{ shrink: true }}
+        />
+        <TextField
+          type="date"
+          fullWidth
+          label="EXP Date"
+          InputLabelProps={{ shrink: true }}
+        />
+      </Box>
+    </Grid>
+
+  </Grid>
+
+
+                        
+
+                    </Card>
+                )}
+
+
+                {/* Results Table */}
+                {showResults && (
+                    <Box mt={4}>
+                        <Typography variant="h6" sx={{ fontWeight: "bold", textDecoration: "underline", mb: 1 }}>
+                            Inspection Results
+                        </Typography>
+                        <TableContainer component={Paper} sx={{ border: "1px solid black" }}>
+                            <Table size="small">
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold" }}>Sample</TableCell>
+                                        <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold" }}>Observed Value</TableCell>
+                                        <TableCell sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold" }}>Result</TableCell>
+                                    </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                    {getInspectionResults().map((res, idx) => (
+                                        <TableRow key={idx}>
+                                            <TableCell sx={{ border: "1px solid black", textAlign: "center" }}>{res.sample}</TableCell>
+                                            <TableCell sx={{ border: "1px solid black", textAlign: "center" }}>{res.value}</TableCell>
+                                            <TableCell
+                                                sx={{
+                                                    border: "1px solid black",
+                                                    textAlign: "center",
+                                                    color: res.status === "Rejected" ? "red" : "green",
+                                                    fontWeight: "bold",
+                                                }}
+                                            >
+                                                {res.status}
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                    {/* Summary row */}
+                                    <TableRow>
+                                        <TableCell
+                                            colSpan={3}
+                                            sx={{ border: "1px solid black", textAlign: "center", fontWeight: "bold", backgroundColor: "#f0f0f0" }}
+                                        >
+                                            Total Accepted: {getSummary().accepted} | Total Rejected: {getSummary().rejected}
+                                        </TableCell>
+                                    </TableRow>
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+                    </Box>
+                )}
+            </Box>
+        </Grid>
+    );
+}
+
+export default ElectricalForm;
+

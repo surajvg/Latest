@@ -1,0 +1,160 @@
+1️⃣ UPDATED FASTAPI ENDPOINT (FULL, SAFE VERSION)
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from datetime import datetime
+from Database_models import (
+    DimensionCommonReport,
+    Measuring_Instruments_Used
+)
+from Database import session
+
+router = APIRouter()
+
+def init_db():
+    db = session()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@router.post("/dimensionreport/samples")
+def save_dimension_and_additional_details(payload: dict, db: Session = Depends(init_db)):
+    """
+    Saves:
+    1️⃣ Measuring Instruments Used
+    2️⃣ Additional Details (Physical + Electrical)
+    """
+
+    try:
+        ref_no = payload.get("Reference_No")
+        if not ref_no:
+            raise HTTPException(status_code=400, detail="Reference_No is required")
+
+        # ----------------------------------------
+        # 1️⃣ SAVE MEASURING INSTRUMENTS USED
+        # ----------------------------------------
+        instrument_ids = payload.get("Instrument_id", [])
+        for inst_id in instrument_ids:
+            exists = db.query(Measuring_Instruments_Used).filter(
+                Measuring_Instruments_Used.Reference_No == ref_no,
+                Measuring_Instruments_Used.Equipment_ID == inst_id
+            ).first()
+
+            if not exists:
+                db.add(
+                    Measuring_Instruments_Used(
+                        Reference_No=ref_no,
+                        Equipment_ID=inst_id
+                    )
+                )
+
+        # ----------------------------------------
+        # 2️⃣ SAVE ADDITIONAL DETAILS (COMMON)
+        # ----------------------------------------
+        common_data = payload.get("Common", {})
+
+        if not isinstance(common_data, dict):
+            raise HTTPException(status_code=400, detail="Common must be an object")
+
+        existing = db.query(DimensionCommonReport).filter(
+            DimensionCommonReport.Reference_No == ref_no
+        ).first()
+
+        if existing:
+            # UPDATE
+            for field, value in common_data.items():
+                if hasattr(existing, field):
+                    setattr(existing, field, value)
+        else:
+            # INSERT
+            db.add(
+                DimensionCommonReport(
+                    Reference_No=ref_no,
+                    **common_data
+                )
+            )
+
+        db.commit()
+
+        return {
+            "status": "success",
+            "message": "Additional Details saved successfully",
+            "Reference_No": ref_no
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+2️⃣ FRONTEND – PHYSICAL FORM (SAVE ADDITIONAL DETAILS)
+
+const savePhysicalAdditionalDetails = async () => {
+  await axios.post("http://localhost:8000/dimensionreport/samples", {
+    Reference_No: receiptNo,
+    Common: {
+      Remarks,
+      Marking_On_Material,
+      Dimension_Remark,
+      Visual_Inspection_Report,
+      userID,
+      userName,
+      userRole,
+      userSBU,
+      userSBUDIV
+    }
+  });
+};
+
+3️⃣ FRONTEND – ELECTRICAL FORM (SAVE ADDITIONAL DETAILS)
+
+const saveElectricalAdditionalDetails = async () => {
+  await axios.post("http://localhost:8000/dimensionreport/samples", {
+    Reference_No: receiptNo,
+    Common: {
+      Electrical_Inspection_Remark,
+      Electrical_Parameter,
+      Functional,
+      Dimensions,
+      Visual_Inspection,
+      COC,
+      Test_Reports,
+      Imported_Doc_Received,
+      Malware_Free_Cert,
+      FOD_Check,
+      Counterfeit_Checked,
+      MFG_Date,
+      Exp_Date,
+      userID,
+      userName,
+      userRole,
+      userSBU,
+      userSBUDIV
+    }
+  });
+};
+
+4️⃣ OPTIONAL: FETCH ADDITIONAL DETAILS (GET API)
+
+@router.get("/inspection/additional-details")
+def get_additional_details(Ref_No: str, db: Session = Depends(init_db)):
+    record = db.query(DimensionCommonReport).filter(
+        DimensionCommonReport.Reference_No == Ref_No
+    ).first()
+
+    if not record:
+        return {}
+
+    return record
+
+//FRONTEND
+
+const res = await axios.get(
+  "http://localhost:8000/inspection/additional-details",
+  { params: { Ref_No: receiptNo } }
+);
+setAdditionalDetails(res.data);
+
+
