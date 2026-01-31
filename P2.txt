@@ -1,0 +1,384 @@
+Here is the updated solution to save the specific **Electrical Inspection** fields.
+
+### 1. Backend Changes (`Data_Server.py`)
+
+Update the `save_dimension_report` function to extract the new electrical fields from the `Common` payload and map them to the `DimensionCommonReport` database model.
+
+```python
+@app.post("/dimensionreport/samples")
+def save_dimension_report(payload: dict, db: Session = Depends(init_db)):
+    ref_no = payload["Reference_No"]
+    
+    # 1. Instrument Mapping
+    instrument_id = payload.get('Instrument_id', [])
+    for id in instrument_id:
+        count = db.query(Measuring_Instruments_Used).filter(
+            Measuring_Instruments_Used.Reference_No == ref_no,
+            Measuring_Instruments_Used.Equipment_ID == id
+        ).count()
+        if count == 0:
+            intrument_used = Measuring_Instruments_Used(
+                Reference_No=ref_no,
+                Equipment_ID=id
+            )
+            db.add(intrument_used)
+            db.commit()
+
+    # 2. Save COMMON DATA (Updated with Electrical Fields)
+    common_data = payload.get("Common", {})
+    
+    common_row = DimensionCommonReport(
+        Reference_No=ref_no,
+        Remarks=common_data.get("Remarks"),
+        Marking_On_Material=common_data.get("Marking_On_Material"),
+        Dimension_Remark=common_data.get("Dimension_Remark"),
+        Visual_Inspection_Report=common_data.get("Visual_Inspection_Report"),
+        
+        # --- NEW ELECTRICAL FIELDS ---
+        Electrical_Inspection_Remark=common_data.get("Electrical_Inspection_Remark"),
+        Electrical_Parameter=common_data.get("Electrical_Parameter"),
+        Functional=common_data.get("Functional"),
+        Dimensions=common_data.get("Dimensions_Check"), # Mapped from 'Dimensions' dropdown
+        Visual_Inspection=common_data.get("Visual_Inspection_Status"), # Mapped from 'Visual Inspection' dropdown
+        COC=common_data.get("COC"),
+        Test_Reports=common_data.get("Test_Reports"),
+        Imported_Doc_Received=common_data.get("Imported_Doc_Received"),
+        Malware_Free_Cert=common_data.get("Malware_Free_Cert"),
+        FOD_Check=common_data.get("FOD_Check"),
+        Counterfeit_Checked=common_data.get("Counterfeit_Checked"),
+        MFG_Date=common_data.get("MFG_Date") if common_data.get("MFG_Date") else None,
+        Exp_Date=common_data.get("Exp_Date") if common_data.get("Exp_Date") else None,
+        # -----------------------------
+
+        Qty_Received=common_data.get("Qty_Received"),
+        Qty_Inspected=common_data.get("Qty_Inspected"),
+        Qty_Accepted=common_data.get("Qty_Accepted"),
+        Qty_Rejected=common_data.get("Qty_Rejected"),
+        Inspection_Remarks=common_data.get("Inspection_Remarks"),
+        userID=common_data.get("userID"),
+        userName=common_data.get("userName"),
+        userRole=common_data.get("userRole"),
+        userSBU=common_data.get("userSBU"),
+        userSBUDIV=common_data.get("userSBUDIV")
+    )
+
+    # Delete existing common record if it exists to allow update
+    existing_record = db.query(DimensionCommonReport).filter(
+        DimensionCommonReport.Reference_No == ref_no
+    ).first()
+
+    if existing_record:
+        db.delete(existing_record)
+        db.commit()
+    
+    db.add(common_row)
+    db.commit()
+
+    # 3. Save Dimensions Samples (Existing logic)
+    for dim in payload["Dimensions"]:
+        report = db.query(DimensionReport).filter(DimensionReport.Id == dim["Report_Id"]).first()
+        if report:
+            db.query(DimensionSample).filter(DimensionSample.Report_Id == report.Id).delete()
+            db.commit()
+            for s in dim["Samples"]:
+                sample = DimensionSample(
+                    Report_Id=report.Id,
+                    Sample_No=s["Sample_No"],
+                    Value=s["Value"],
+                    Status=s["Status"],
+                    Remarks=s["Remarks"],
+                    Dimension_View_Parameter=s["Dimension_View_Parameter"],
+                    Dimension_Parameter_Unit=s["Dimension_Parameter_Unit"]
+                )
+                db.add(sample)
+            db.commit()
+
+    return {"status": "success", "message": "Dimension data saved successfully"}
+
+```
+
+---
+
+### 2. Frontend Changes (`ElectricalForm.js`)
+
+I have updated the `common` state to include all the new fields, bound them to the UI, and updated the `buildPayload` function.
+
+```javascript
+import React, { useState, useEffect } from "react";
+import axios from "axios";
+import {
+  Box, Button, Card, Divider, Grid, Paper, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, TextField, Typography, MenuItem, Stack, Chip
+} from "@mui/material";
+import AddCircleIcon from "@mui/icons-material/AddCircle";
+import DeleteIcon from "@mui/icons-material/Delete";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import SaveIcon from "@mui/icons-material/Save";
+import StraightenIcon from '@mui/icons-material/Straighten';
+import InstrumentList from "../MaterialInspection/InstrumentList";
+import { useSelector } from "react-redux";
+
+// ... [Keep your existing Styles here] ...
+
+function ElectricalForm({ sampleCount, onSummaryChange, selectedRow = [], Ref_No, onCheckSave }) {
+  
+  // --- STATE ---
+  const [rows, setRows] = useState([]);
+  const [showResults, setShowResults] = useState(false);
+  const [showMarkingTable, setShowMarkingTable] = useState(false);
+  const [instrumentData, setInstrumentData] = useState([]);
+
+  // --- COMMON STATE (Updated with new fields) ---
+  const [common, setCommon] = useState({
+    remarks: "",
+    markingOnMaterial: "",
+    visualInspectionRemark: "", // Text area remark
+    
+    // New Electrical Fields
+    electricalInspectionRemark: "",
+    electricalParameter: "",
+    functional: "",
+    dimensionsCheck: "", // Dropdown status
+    visualInspectionStatus: "", // Dropdown status
+    coc: "",
+    testReports: "",
+    importedDoc: "",
+    malwareCert: "",
+    fodCheck: "",
+    counterfeitCheck: "",
+    mfgDate: "",
+    expDate: "",
+
+    qtyReceived: "",
+    inspectionRemarks: "",
+  });
+
+  // ... [Keep your useEffects for Rows, Validation, etc. here] ...
+
+  let user = JSON.parse(localStorage.getItem("user"));
+
+  // --- PAYLOAD BUILDER ---
+  const buildPayload = () => {
+    const instrumentIds = instrumentData
+        .map(inst => inst.selectedInstrument || "")
+        .filter(id => id !== "");
+
+    return {
+      Reference_No: rows[0]?.refNo || "",
+      Instrument_id: instrumentIds,
+      Common: {
+        Remarks: common.remarks || "",
+        Marking_On_Material: common.markingOnMaterial || "",
+        Visual_Inspection_Report: common.visualInspectionRemark || "", // Text Remark
+        
+        // ⭐ NEW MAPPINGS
+        Electrical_Inspection_Remark: common.electricalInspectionRemark || "",
+        Electrical_Parameter: common.electricalParameter || "",
+        Functional: common.functional || "",
+        Dimensions_Check: common.dimensionsCheck || "", // Mapped to 'Dimensions' col in DB
+        Visual_Inspection_Status: common.visualInspectionStatus || "", // Mapped to 'Visual_Inspection' col in DB
+        COC: common.coc || "",
+        Test_Reports: common.testReports || "",
+        Imported_Doc_Received: common.importedDoc || "",
+        Malware_Free_Cert: common.malwareCert || "",
+        FOD_Check: common.fodCheck || "",
+        Counterfeit_Checked: common.counterfeitCheck || "",
+        MFG_Date: common.mfgDate || null,
+        Exp_Date: common.expDate || null,
+
+        Qty_Received: common.qtyReceived || "",
+        Qty_Inspected: getQtyInspected(), // Ensure this function exists in your component
+        Qty_Accepted: getSummary().accepted || "", // Ensure this function exists
+        Qty_Rejected: getSummary().rejected || "", // Ensure this function exists
+        Inspection_Remarks: common.inspectionRemarks || "",
+        
+        userID: user?.id,
+        userName: user?.username,
+        userRole: user?.userRole,
+        userSBU: user?.sbu,
+        userSBUDIV: user?.subdivision,
+      },
+      Dimensions: rows.map((r) => ({
+        Report_Id: r.Dimension_Report_Id,
+        Tolerance: r.tolerance, 
+        Samples: r.observed.map((value, index) => {
+            if (!value) return null;
+            const num = parseFloat(value);
+            const min = parseFloat(r.min);
+            const max = parseFloat(r.max);
+            const status = !isNaN(num) && num >= min && num <= max ? "Accepted" : "Rejected";
+            return {
+              Sample_No: index + 1, Value: num, Status: status, Remarks: r.remarks,
+              Dimension_View_Parameter: r.dimensionParameter, Dimension_Parameter_Unit: r.Dimension_Name_Unit
+            };
+          }).filter((x) => x !== null)
+      }))
+    };
+  };
+
+  // ... [Keep handleSave, handleChange, etc.] ...
+
+  return (
+    <Grid item xs={12} sx={{ mt: 2 }}>
+      
+      {/* ... [Keep Header, Table, Results, InstrumentList] ... */}
+
+      {showMarkingTable && (
+          <Card sx={{ p: 4, mt: 4, width: "100%", border: "1px solid #cfcfcf", boxShadow: "0px 3px 10px rgba(0,0,0,0.1)", borderRadius: "12px", background: "linear-gradient(to bottom, #fafafa, #ffffff)" }}>
+            <Typography variant="h6" sx={{ fontWeight: "bold", mb: 3, textDecoration: "underline", fontFamily: "Times New Roman", color: "#0d47a1" }}>
+              Remarks & Checkpoints
+            </Typography>
+
+            {/* Electrical Inspection Remark */}
+            <Box sx={{ mb: 3 }}>
+              <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>
+                Electrical Inspection Remark :
+              </Typography>
+              <TextField
+                fullWidth multiline rows={2} placeholder="Enter electrical inspection remark" variant="outlined"
+                value={common.electricalInspectionRemark}
+                onChange={(e) => setCommon({ ...common, electricalInspectionRemark: e.target.value })}
+              />
+            </Box>
+
+            {/* FORM CONTENT IN SYSTEMATIC ORDER */}
+            <Grid container spacing={3}>
+
+              {/* Electrical Parameter */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>Electrical Parameter :</Typography>
+                <TextField fullWidth select value={common.electricalParameter} onChange={(e) => setCommon({ ...common, electricalParameter: e.target.value })} variant="outlined">
+                  <MenuItem value="NA">NA</MenuItem>
+                  <MenuItem value="OK">OK</MenuItem>
+                  <MenuItem value="NOT OK">NOT OK</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Functional */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>Functional :</Typography>
+                <TextField fullWidth select value={common.functional} onChange={(e) => setCommon({ ...common, functional: e.target.value })} variant="outlined">
+                  <MenuItem value="NA">NA</MenuItem>
+                  <MenuItem value="OK">OK</MenuItem>
+                  <MenuItem value="NOT OK">NOT OK</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Dimensions */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>Dimensions :</Typography>
+                <TextField fullWidth select value={common.dimensionsCheck} onChange={(e) => setCommon({ ...common, dimensionsCheck: e.target.value })} variant="outlined">
+                  <MenuItem value="NA">NA</MenuItem>
+                  <MenuItem value="OK">OK</MenuItem>
+                  <MenuItem value="NOT OK">NOT OK</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Visual Inspection */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>Visual Inspection :</Typography>
+                <TextField fullWidth select value={common.visualInspectionStatus} onChange={(e) => setCommon({ ...common, visualInspectionStatus: e.target.value })} variant="outlined">
+                  <MenuItem value="NA">NA</MenuItem>
+                  <MenuItem value="OK">OK</MenuItem>
+                  <MenuItem value="NOT OK">NOT OK</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* COC */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>COC :</Typography>
+                <TextField fullWidth select value={common.coc} onChange={(e) => setCommon({ ...common, coc: e.target.value })} variant="outlined">
+                  <MenuItem value="received">Received</MenuItem>
+                  <MenuItem value="not_received">Not Received</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Test Report */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>Test Report :</Typography>
+                <TextField fullWidth select value={common.testReports} onChange={(e) => setCommon({ ...common, testReports: e.target.value })} variant="outlined">
+                  <MenuItem value="received">Received</MenuItem>
+                  <MenuItem value="not_received">Not Received</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Imported Document */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>Imported Document Received :</Typography>
+                <TextField fullWidth select value={common.importedDoc} onChange={(e) => setCommon({ ...common, importedDoc: e.target.value })} variant="outlined">
+                  <MenuItem value="received">Received</MenuItem>
+                  <MenuItem value="not_received">Not Received</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Malware Certificate */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>Malware Free Certificate :</Typography>
+                <TextField fullWidth select value={common.malwareCert} onChange={(e) => setCommon({ ...common, malwareCert: e.target.value })} variant="outlined">
+                  <MenuItem value="received">Received</MenuItem>
+                  <MenuItem value="not_received">Not Received</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* FOD Check */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>FOD Check :</Typography>
+                <TextField fullWidth select value={common.fodCheck} onChange={(e) => setCommon({ ...common, fodCheck: e.target.value })} variant="outlined">
+                  <MenuItem value="yes">Yes</MenuItem>
+                  <MenuItem value="no">No</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Counterfeit */}
+              <Grid item xs={12} md={3}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>Counterfeit Checked :</Typography>
+                <TextField fullWidth select value={common.counterfeitCheck} onChange={(e) => setCommon({ ...common, counterfeitCheck: e.target.value })} variant="outlined">
+                  <MenuItem value="yes">Yes</MenuItem>
+                  <MenuItem value="no">No</MenuItem>
+                </TextField>
+              </Grid>
+
+              {/* Shelf Life */}
+              <Grid item xs={12} md={6}>
+                <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", mb: 1 }}>Shelf Lifetime Date :</Typography>
+                <Box sx={{ display: "flex", gap: 2 }}>
+                  <TextField
+                    type="date" fullWidth label="MFG Date" InputLabelProps={{ shrink: true }}
+                    value={common.mfgDate} onChange={(e) => setCommon({ ...common, mfgDate: e.target.value })}
+                  />
+                  <TextField
+                    type="date" fullWidth label="EXP Date" InputLabelProps={{ shrink: true }}
+                    value={common.expDate} onChange={(e) => setCommon({ ...common, expDate: e.target.value })}
+                  />
+                </Box>
+              </Grid>
+
+            </Grid>
+          </Card>
+      )}
+
+      {/* Save Button */}
+      <Box sx={{ display: 'flex', justifyContent: 'center', pb: 2, mt: 3 }}>
+          <Button
+            variant="contained"
+            startIcon={<SaveIcon />}
+            onClick={handleSave}
+            // disabled={isSaveDisabled()}
+            sx={{
+              px: 4, py: 1, background: "linear-gradient(135deg, #1976d2, #1565c0)", color: "white", fontWeight: "bold", borderRadius: "25px",
+              boxShadow: "0 4px 12px rgba(25, 118, 210, 0.3)", textTransform: "none",
+              "&:hover": { background: "linear-gradient(135deg, #1565c0, #0d47a1)", boxShadow: "0 6px 16px rgba(25, 118, 210, 0.4)" },
+            }}
+          >
+            Save Inspection Data
+          </Button>
+      </Box>
+
+    </Grid>
+  );
+}
+
+export default ElectricalForm;
+
+```

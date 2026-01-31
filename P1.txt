@@ -1,0 +1,817 @@
+Here is the complete solution. I have updated the **Frontend (`PhysicalForm.js`)** to fetch the vendor details and bind the input fields to the state, and I have updated the **Backend (`Data_Server.py`)** to ensure the specific keys are saved correctly.
+
+### 1. Backend Changes (`Data_Server.py`)
+
+In your `Data_Server.py`, the `save_dimension_report` function uses `**common` to unpack data. We need to ensure the keys sent from the frontend match the database columns exactly.
+
+**Note:** Ensure your `DimensionCommonReport` class in `Database_models.py` has a column named `Dimension_Remark`.
+
+Update the `save_dimension_report` function in `Data_Server.py`:
+
+```python
+@app.post("/dimensionreport/samples")
+def save_dimension_report(payload: dict, db: Session = Depends(init_db)):
+    ref_no = payload["Reference_No"]
+    
+    # --- 1. Instrument Mapping ---
+    instrument_id = payload.get('Instrument_id', [])
+    for id in instrument_id:
+        count = db.query(Measuring_Instruments_Used).filter(
+            Measuring_Instruments_Used.Reference_No == ref_no,
+            Measuring_Instruments_Used.Equipment_ID == id
+        ).count()
+        if count == 0:
+            intrument_used = Measuring_Instruments_Used(
+                Reference_No=ref_no,
+                Equipment_ID=id
+            )
+            db.add(intrument_used)
+            db.commit()
+
+    # --- 2. Save COMMON DATA ---
+    common_data = payload.get("Common", {})
+    
+    # Explicitly map fields to ensure frontend keys match DB columns
+    common_row = DimensionCommonReport(
+        Reference_No=ref_no,
+        Remarks=common_data.get("Remarks"),
+        Marking_On_Material=common_data.get("Marking_On_Material"),
+        Dimension_Remark=common_data.get("Dimension_Remark"), # Added this
+        Visual_Inspection_Report=common_data.get("Visual_Inspection_Report"),
+        COC=common_data.get("COC"),
+        Test_Reports=common_data.get("Test_Reports"),
+        Qty_Received=common_data.get("Qty_Received"),
+        Qty_Inspected=common_data.get("Qty_Inspected"),
+        Qty_Accepted=common_data.get("Qty_Accepted"),
+        Qty_Rejected=common_data.get("Qty_Rejected"),
+        Inspection_Remarks=common_data.get("Inspection_Remarks"),
+        userID=common_data.get("userID"),
+        userName=common_data.get("userName"),
+        userRole=common_data.get("userRole"),
+        userSBU=common_data.get("userSBU"),
+        userSBUDIV=common_data.get("userSBUDIV")
+    )
+
+    # Check if record exists, delete and recreate (or update)
+    existing_record = db.query(DimensionCommonReport).filter(
+        DimensionCommonReport.Reference_No == ref_no
+    ).first()
+
+    if existing_record:
+        db.delete(existing_record)
+        db.commit()
+    
+    db.add(common_row)
+    db.commit()
+
+    # --- 3. Save EACH DIMENSION + Samples ---
+    for dim in payload["Dimensions"]:
+        # Fetch report ID
+        report = db.query(DimensionReport).filter(
+            DimensionReport.Id == dim["Report_Id"]
+        ).first()
+
+        if report:
+            # Clear old samples
+            db.query(DimensionSample).filter(
+                DimensionSample.Report_Id == report.Id
+            ).delete()
+            db.commit()
+
+            # Insert new samples
+            for s in dim["Samples"]:
+                sample = DimensionSample(
+                    Report_Id=report.Id,
+                    Sample_No=s["Sample_No"],
+                    Value=s["Value"],
+                    Status=s["Status"],
+                    Remarks=s["Remarks"],
+                    Dimension_View_Parameter=s["Dimension_View_Parameter"],
+                    Dimension_Parameter_Unit=s["Dimension_Parameter_Unit"]
+                )
+                db.add(sample)
+            db.commit()
+
+    return {"status": "success", "message": "Dimension data saved successfully"}
+
+```
+
+---
+
+### 2. Frontend Changes (`PhysicalForm.js`)
+
+I have updated the component to:
+
+1. **Fetch Data:** Used a `useEffect` to call `/inspection/full` (based on your `Data_Server.py` logic) to populate the `form` state for the "Marking on Package" section.
+2. **Bind Inputs:** Connected the 3 specific TextFields to the `common` state.
+3. **Update Payload:** Included `Dimension_Remark` in the payload.
+
+```javascript
+import React, { useState, useEffect } from "react";
+import axios from "axios";
+import {
+  Box,
+  Button,
+  Card,
+  Divider,
+  Grid,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TextField,
+  Typography,
+  MenuItem,
+  Stack,
+  Chip
+} from "@mui/material";
+
+import AddCircleIcon from "@mui/icons-material/AddCircle";
+import DeleteIcon from "@mui/icons-material/Delete";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import SaveIcon from "@mui/icons-material/Save";
+import StraightenIcon from '@mui/icons-material/Straighten';
+import InstrumentList from "../MaterialInspection/InstrumentList";
+import { useSelector } from "react-redux";
+
+// --- CUSTOM STYLES ---
+const headerStyle = {
+  backgroundColor: "#e3f2fd",
+  color: "#1565c0",
+  fontWeight: "bold",
+  fontSize: "0.85rem",
+  textAlign: "center",
+  borderRight: "1px solid #bbdefb",
+  borderBottom: "1px solid #90caf9",
+  whiteSpace: "nowrap",
+  padding: "10px 4px"
+};
+
+const inputCellStyle = {
+  borderRight: "1px solid #f0f0f0",
+  padding: "4px",
+  backgroundColor: "#ffffff"
+};
+
+const readOnlyCellStyle = {
+  backgroundColor: "#f5f5f5", 
+  textAlign: "center",
+  color: "#546e7a",
+  fontWeight: "bold",
+  borderRight: "1px solid #e0e0e0",
+  fontSize: "0.8rem"
+};
+
+const textFieldStyle = {
+    "& .MuiInputBase-input": { 
+        textAlign: "center", 
+        fontSize: "0.85rem", 
+        padding: "4px" 
+    }
+};
+
+function PhysicalForm({ sampleCount, onSummaryChange, selectedRow = [], Ref_No, onCheckSave }) {
+  
+  // --- STATE ---
+  const [rows, setRows] = useState([]);
+  const [showResults, setShowResults] = useState(false);
+  const [showMarkingTable, setShowMarkingTable] = useState(false);
+  const [instrumentData, setInstrumentData] = useState([]);
+
+  // --- FORM STATE FOR "Marking on Package" ---
+  const [form, setForm] = useState({
+    vendor: "",
+    partNumber: "",
+    poNo: "",
+    mpn: "",
+    manufacture: "", // Note: API usually returns Vendor_Name, ensure mapping if needed
+    batchNo: "",
+    totalQty: "",
+  });
+
+  // --- COMMON STATE FOR SAVING ---
+  const [common, setCommon] = useState({
+    remarks: "", // General remarks (optional)
+    markingOnMaterial: "",
+    dimensionRemark: "", // NEW: Dimensional Remark
+    visualInspection: "", // NEW: Visual Inspection Remark
+    coc: "",
+    testReports: "",
+    qtyReceived: "",
+    inspectionRemarks: "",
+  });
+
+  // --- CONFIG & URLS ---
+  var API1 = '/dimensionreport/samples';
+  var SampleURL = "http://192.168.0.20:2000" + API1;
+  const configDetails = useSelector(state => state.MROTDataSavingReducer.configDetails);
+
+  if (configDetails != undefined) {
+    if (configDetails.project[0].ServerIP != undefined) {
+      if (configDetails.project[0].ServerIP[0].PythonServerIP != undefined) {
+        SampleURL = configDetails.project[0].ServerIP[0].PythonServerIP + API1;
+      }
+    }
+  }
+
+  // --- FETCH FORM DATA (Marking on Package) ---
+  useEffect(() => {
+    const fetchDetails = async () => {
+      if (!Ref_No) return;
+      try {
+        // Assuming your Data_Server.py has /inspection/full endpoint or similar
+        // Adjust IP/Port if necessary based on config
+        let baseUrl = "http://192.168.0.20:2000"; 
+        if (configDetails?.project?.[0]?.ServerIP?.[0]?.PythonServerIP) {
+            baseUrl = configDetails.project[0].ServerIP[0].PythonServerIP.replace(API1, ''); 
+        }
+
+        const response = await axios.get(`${baseUrl}/inspection/full?Ref_No=${Ref_No}`);
+        const qrData = response.data.QR_Record;
+        const commonData = response.data.Common_Dimension;
+
+        // Populate Marking on Package
+        if (qrData) {
+          setForm({
+            vendor: qrData.Vendor_Name,
+            partNumber: qrData.BEL_Part_Number,
+            poNo: "", // Check if API returns PO No, mapped from BEL_Part_Number usually?
+            mpn: qrData.MPN,
+            manufacture: qrData.Vendor_Name,
+            batchNo: qrData.Batch_Lot_No,
+            totalQty: qrData.Quantity,
+          });
+        }
+
+        // If existing saved data exists, populate the inputs
+        if (commonData) {
+            setCommon(prev => ({
+                ...prev,
+                markingOnMaterial: commonData.Marking_On_Material || "",
+                dimensionRemark: commonData.Dimension_Remark || "",
+                visualInspection: commonData.Visual_Inspection_Report || "",
+                // ... map other fields if needed
+            }));
+        }
+
+      } catch (error) {
+        console.error("Error fetching inspection details:", error);
+      }
+    };
+
+    fetchDetails();
+  }, [Ref_No, configDetails]);
+
+
+  // --- LOAD ROWS ---
+  useEffect(() => {
+    if (Array.isArray(selectedRow) && selectedRow.length > 0) {
+      const formattedRows = selectedRow.map((item, index) => ({
+        slno: index + 1,
+        Dimension_Name: item.Dimension_Name,
+        Dimension_Name_Unit: item.Dimension_Name_Unit || "", 
+        basicDimension: item.Basic_Dimension || "",
+        tolerance: item.Tolerance || "0.3", 
+        min: item.Min || "",
+        max: item.Max || "",
+        observed: [
+          item.Sample_1 || "", item.Sample_2 || "", item.Sample_3 || "", item.Sample_4 || "", item.Sample_5 || "",
+          item.Sample_6 || "", item.Sample_7 || "", item.Sample_8 || "", item.Sample_9 || "", item.Sample_10 || "",
+          item.Sample_11 || "", item.Sample_12 || "", item.Sample_13 || "", item.Sample_14 || "", item.Sample_15 || "",
+        ],
+        refNo: item.Reference_No,
+        Dimension_Report_Id: item.Dimension_Report_Id,
+        dimensionParameter: item.Dimension_Name || "",
+        remarks: item.Remarks || "",
+      }));
+      setRows(formattedRows);
+    }
+  }, [selectedRow]);
+
+  // --- HELPER FUNCTIONS ---
+  const isRejectedValue = (val, min, max) => {
+    if (val === "") return false;
+    const numVal = parseFloat(val);
+    const minVal = parseFloat(min);
+    const maxVal = parseFloat(max);
+    if(isNaN(minVal) || isNaN(maxVal)) return false; 
+    return numVal < minVal || numVal > maxVal;
+  };
+
+  const getQtyInspected = () => {
+    let count = 0;
+    for (let s = 0; s < sampleCount; s++) {
+      let sampleHasValue = false;
+      for (let r = 0; r < rows.length; r++) {
+        if (rows[r].observed[s] !== "") {
+          sampleHasValue = true;
+          break;
+        }
+      }
+      if (sampleHasValue) count++;
+    }
+    return count;
+  };
+
+  const getInspectionResults = () => {
+    const results = [];
+    for (let s = 0; s < sampleCount; s++) {
+      let hasAnyValue = false;
+      let sampleStatus = "Accepted";
+      const dimensionList = [];
+      const observedList = [];
+      for (let r = 0; r < rows.length; r++) {
+        const row = rows[r];
+        const basicD = row.basicDimension;
+        const valStr = row.observed[s];
+        if (valStr === "" || basicD === "") continue;
+        hasAnyValue = true;
+        const val = parseFloat(valStr);
+        const min = parseFloat(row.min);
+        const max = parseFloat(row.max);
+        dimensionList.push(basicD);
+        observedList.push(val);
+        if (isNaN(val) || val < min || val > max) {
+          sampleStatus = "Rejected";
+        }
+      }
+      if (hasAnyValue) {
+        results.push({
+          sample: s + 1,
+          basicDimensions: dimensionList,
+          observedValues: observedList,
+          status: sampleStatus
+        });
+      }
+    }
+    return results;
+  };
+
+  const getSummary = () => {
+    const results = getInspectionResults();
+    let accepted = 0;
+    let rejected = 0;
+    results.forEach((r) => { r.status === "Accepted" ? accepted++ : rejected++; });
+    return { accepted, rejected };
+  };
+
+  const isSaveDisabled = () => {
+    for (let col = 0; col < sampleCount; col++) {
+      let filledCount = 0;
+      let emptyCount = 0;
+      for (let row of rows) {
+        if (row.observed[col] !== "") filledCount++;
+        else emptyCount++;
+      }
+      if (filledCount > 0 && emptyCount > 0) return true;
+    }
+    return false;
+  };
+
+  // --- HANDLERS ---
+  const handleChange = (index, field, value, obsIndex = null) => {
+    const regex = /^\d*\.?\d{0,3}$/; 
+    setRows((prev) => {
+      const newRows = [...prev];
+      const row = { ...newRows[index] };
+
+      if (field === "basicDimension" || field === "tolerance") {
+        if (value === "" || regex.test(value)) {
+          row[field] = value;
+          const basic = parseFloat(field === "basicDimension" ? value : row.basicDimension);
+          const tol = parseFloat(field === "tolerance" ? value : row.tolerance);
+          if (!isNaN(basic) && !isNaN(tol)) {
+            row.min = (basic - tol).toFixed(2);
+            row.max = (basic + tol).toFixed(2);
+          }
+        }
+      } 
+      else if (field === "observed" && obsIndex !== null) {
+        if (value === "" || regex.test(value)) {
+          const updatedObserved = [...row.observed];
+          updatedObserved[obsIndex] = value;
+          row.observed = updatedObserved;
+        }
+      } 
+      else {
+        if (field === "min" || field === "max") {
+             if (value === "" || regex.test(value)) row[field] = value;
+        } else {
+             row[field] = value; 
+        }
+      }
+      newRows[index] = row;
+      return newRows;
+    });
+  };
+
+  const buildPayload = () => {
+    let user = JSON.parse(localStorage.getItem("user"));
+    const instrumentIds = instrumentData
+        .map(inst => inst.selectedInstrument || "")
+        .filter(id => id !== "");
+    
+    return {
+      Reference_No: rows[0]?.refNo || Ref_No || "",
+      Instrument_id: instrumentIds,
+      Common: {
+        Remarks: common.remarks || "",
+        // ⭐ UPDATED MAPPINGS HERE
+        Marking_On_Material: common.markingOnMaterial || "", 
+        Dimension_Remark: common.dimensionRemark || "",
+        Visual_Inspection_Report: common.visualInspection || "",
+        
+        COC: common.coc || "",
+        Test_Reports: common.testReports || "",
+        Qty_Received: common.qtyReceived || "",
+        Qty_Inspected: getQtyInspected(),
+        Qty_Accepted: getSummary().accepted || "",
+        Qty_Rejected: getSummary().rejected || "",
+        Inspection_Remarks: common.inspectionRemarks || "",
+        userID: user?.id,
+        userName: user?.username,
+        userRole: user?.userRole,
+        userSBU: user?.sbu,
+        userSBUDIV: user?.subdivision,
+      },
+      Dimensions: rows.map((r) => ({
+        Report_Id: r.Dimension_Report_Id,
+        Tolerance: r.tolerance, 
+        Samples: r.observed.map((value, index) => {
+            if (!value) return null;
+            const num = parseFloat(value);
+            const min = parseFloat(r.min);
+            const max = parseFloat(r.max);
+            const status = !isNaN(num) && num >= min && num <= max ? "Accepted" : "Rejected";
+            return {
+              Sample_No: index + 1, Value: num, Status: status, Remarks: r.remarks,
+              Dimension_View_Parameter: r.dimensionParameter, Dimension_Parameter_Unit: r.Dimension_Name_Unit
+            };
+          }).filter((x) => x !== null)
+      }))
+    };
+  };
+
+  const handleSave = async () => {
+    try {
+      const payload = buildPayload();
+      console.log("Final Payload:", payload);
+      await axios.post(SampleURL, payload);
+      alert("Data saved successfully!");
+    } catch (error) {
+      console.error("Error saving data:", error);
+      alert("Failed to save data.");
+    }
+  };
+
+  // --- UI RENDER ---
+  return (
+    <Grid item xs={12} sx={{ mt: 2 }}>
+      
+      {/* --- HEADER CARD --- */}
+      <Paper 
+        elevation={0} 
+        sx={{ 
+          p: 2, mb: 2, borderRadius: 2, border: "1px solid #e0e0e0", borderTop: "4px solid #1565c0", 
+          display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "#ffffff"
+        }}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Box sx={{ p: 1, borderRadius: "50%", backgroundColor: "#e3f2fd", color: "#1565c0" }}><StraightenIcon /></Box>
+            <Box>
+                <Typography variant="h6" fontWeight="bold" color="#37474f">Mechanical Form</Typography>
+                <Typography variant="caption" color="text.secondary">Measure and record observations for {sampleCount} samples</Typography>
+            </Box>
+        </Box>
+
+        <Stack direction="row" spacing={1}>
+            <Button 
+                variant="outlined" color="success" startIcon={<AddCircleIcon />}
+                onClick={() => {
+                  setRows([...rows, {
+                    slno: rows.length + 1,
+                    dimensionParameter: "",
+                    Dimension_Name_Unit: "", 
+                    basicDimension: "",
+                    tolerance: "0.3", 
+                    min: "",
+                    max: "",
+                    observed: Array(sampleCount).fill(""),
+                    remarks: ""
+                  }]);
+                }}
+                sx={{ borderRadius: 2, textTransform: "none" }}
+            >
+                Add Row
+            </Button>
+            <Button 
+                variant="outlined" color="error" startIcon={<DeleteIcon />} disabled={rows.length === 1}
+                onClick={() => { if (rows.length > 1) setRows(rows.slice(0, -1)); }}
+                sx={{ borderRadius: 2, textTransform: "none" }}
+            >
+                Delete Row
+            </Button>
+            <Button 
+                variant="contained" onClick={() => setShowResults(!showResults)}
+                startIcon={showResults ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                sx={{ backgroundColor: "#1565c0", borderRadius: 2, textTransform: "none", "&:hover": { backgroundColor: "#0d47a1" } }}
+            >
+                {showResults ? "Hide Results" : "Show Results"}
+            </Button>
+            <Button 
+                variant="contained" onClick={() => setShowMarkingTable(prev => !prev)}
+                startIcon={<AddCircleIcon />}
+                sx={{ backgroundColor: "#1565c0", borderRadius: 2, textTransform: "none", "&:hover": { backgroundColor: "#0d47a1" } }}
+            >
+                Additional Details
+            </Button>
+        </Stack>
+      </Paper>
+
+      {/* --- DATA TABLE --- */}
+      <TableContainer component={Paper} elevation={0} sx={{ border: "1px solid #e0e0e0", borderRadius: 2, overflowX: "auto", mb: 3 }}>
+        <Table size="small" stickyHeader>
+          <TableHead>
+            <TableRow>
+              <TableCell sx={{ ...headerStyle, width: 50 }}>SL</TableCell>
+              <TableCell sx={{ ...headerStyle, minWidth: 180 }}>Parameter</TableCell>
+              <TableCell sx={{ ...headerStyle, width: 100 }}>Unit</TableCell> 
+              <TableCell sx={{ ...headerStyle, width: 80 }}>Tol (±)</TableCell>
+              <TableCell sx={{ ...headerStyle, width: 80, backgroundColor: "#fffde7", color: "#fbc02d" }}>Basic</TableCell>
+              <TableCell sx={{ ...headerStyle, width: 70, backgroundColor: "#ffebee", color: "#c62828" }}>Min</TableCell>
+              <TableCell sx={{ ...headerStyle, width: 70, backgroundColor: "#ffebee", color: "#c62828" }}>Max</TableCell>
+              {Array.from({ length: sampleCount }, (_, i) => (
+                <TableCell key={i} sx={{ ...headerStyle, minWidth: 60, color: "#2e7d32", backgroundColor: "#e8f5e9" }}>S-{i + 1}</TableCell>
+              ))}
+              <TableCell sx={{ ...headerStyle, minWidth: 150 }}>Remarks</TableCell>
+            </TableRow>
+          </TableHead>
+
+          <TableBody>
+            {rows.map((row, i) => (
+              <TableRow key={i} hover>
+                <TableCell sx={readOnlyCellStyle}>{i + 1}</TableCell>
+                <TableCell sx={inputCellStyle}>
+                  <TextField 
+                    variant="standard" fullWidth placeholder="Parameter"
+                    value={row.dimensionParameter} 
+                    onChange={(e) => handleChange(i, "dimensionParameter", e.target.value)} 
+                    InputProps={{ disableUnderline: true }}
+                    sx={textFieldStyle}
+                  />
+                </TableCell>
+                <TableCell sx={inputCellStyle}>
+                  <TextField
+                    variant="standard" fullWidth placeholder="Unit"
+                    value={row.Dimension_Name_Unit || ""}
+                    onChange={(e) => handleChange(i, "Dimension_Name_Unit", e.target.value)}
+                    InputProps={{ disableUnderline: true }}
+                    sx={textFieldStyle}
+                  />
+                </TableCell>
+                <TableCell sx={inputCellStyle}>
+                  <TextField 
+                    variant="standard" fullWidth placeholder="0.3"
+                    value={row.tolerance} 
+                    onChange={(e) => handleChange(i, "tolerance", e.target.value)} 
+                    InputProps={{ disableUnderline: true }}
+                    sx={textFieldStyle}
+                  />
+                </TableCell>
+                <TableCell sx={{ ...inputCellStyle, backgroundColor: "#fffde7" }}>
+                  <TextField 
+                    variant="standard" fullWidth placeholder="0.00"
+                    value={row.basicDimension} 
+                    onChange={(e) => handleChange(i, "basicDimension", e.target.value)} 
+                    inputProps={{ style: { fontWeight: 'bold' }}}
+                    InputProps={{ disableUnderline: true }}
+                    sx={textFieldStyle}
+                  />
+                </TableCell>
+                <TableCell sx={{ ...inputCellStyle, backgroundColor: "#fff5f5" }}>
+                   <TextField 
+                    variant="standard" fullWidth placeholder="Min"
+                    value={row.min} 
+                    onChange={(e) => handleChange(i, "min", e.target.value)} 
+                    InputProps={{ disableUnderline: true }}
+                    sx={textFieldStyle}
+                  />
+                </TableCell>
+                <TableCell sx={{ ...inputCellStyle, backgroundColor: "#fff5f5" }}>
+                    <TextField 
+                    variant="standard" fullWidth placeholder="Max"
+                    value={row.max} 
+                    onChange={(e) => handleChange(i, "max", e.target.value)} 
+                    InputProps={{ disableUnderline: true }}
+                    sx={textFieldStyle}
+                  />
+                </TableCell>
+                {row.observed.map((val, j) => {
+                    const isError = isRejectedValue(val, row.min, row.max);
+                    return (
+                        <TableCell key={j} sx={{ ...inputCellStyle, backgroundColor: isError ? "#ffebee" : "#ffffff", borderRight: "1px solid #f1f1f1" }}>
+                        <TextField 
+                            variant="standard" value={val} 
+                            onChange={(e) => handleChange(i, "observed", e.target.value, j)} 
+                            inputProps={{ style: { color: isError ? "#d32f2f" : "#2e7d32", fontWeight: val ? "bold" : "normal" } }} 
+                            InputProps={{ disableUnderline: true }}
+                            sx={textFieldStyle}
+                        />
+                        </TableCell>
+                    );
+                })}
+                <TableCell sx={inputCellStyle}>
+                  <TextField 
+                    variant="standard" fullWidth placeholder="Note"
+                    value={row.remarks} 
+                    onChange={(e) => handleChange(i, "remarks", e.target.value)} 
+                    InputProps={{ disableUnderline: true }}
+                    sx={textFieldStyle}
+                  />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <Stack spacing={3}>
+        {showResults && (
+          <Paper elevation={0} sx={{ p: 2, backgroundColor: "#fafafa", border: "1px solid #e0e0e0", borderRadius: 2 }}>
+            <Typography variant="subtitle2" sx={{ mb: 2, color: "#546e7a", textTransform: "uppercase", letterSpacing: 1, textAlign:'center' }}>Inspection Results Summary</Typography>
+            <TableContainer sx={{ maxHeight: 300 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: "bold", bgcolor: "#eeeeee", textAlign: 'center' }}>Sample</TableCell>
+                    <TableCell sx={{ fontWeight: "bold", bgcolor: "#eeeeee", textAlign: 'center' }}>Basic Dimension</TableCell>
+                    <TableCell sx={{ fontWeight: "bold", bgcolor: "#eeeeee", textAlign: 'center' }}>Observed Value</TableCell>
+                    <TableCell sx={{ fontWeight: "bold", bgcolor: "#eeeeee", textAlign: 'center' }}>Result</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {getInspectionResults().map((res, idx) => (
+                    <React.Fragment key={idx}>
+                      {res.basicDimensions.map((dim, dIdx) => (
+                        <TableRow key={`${idx}-${dIdx}`}>
+                          {dIdx === 0 && (
+                            <TableCell rowSpan={res.basicDimensions.length} sx={{ textAlign: "center", verticalAlign: "middle", fontWeight: "bold", borderRight: '1px solid #e0e0e0', color: '#1565c0' }}>Sample {res.sample}</TableCell>
+                          )}
+                          <TableCell sx={{ textAlign: "center" }}>{dim}</TableCell>
+                          <TableCell sx={{ textAlign: "center" }}>{res.observedValues[dIdx]}</TableCell>
+                          {dIdx === 0 && (
+                            <TableCell rowSpan={res.basicDimensions.length} sx={{ textAlign: "center", verticalAlign: "middle", borderLeft: '1px solid #e0e0e0' }}>
+                              <Chip label={res.status} color={res.status === "Accepted" ? "success" : "error"} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />
+                            </TableCell>
+                          )}
+                        </TableRow>
+                      ))}
+                    </React.Fragment>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+        )}
+
+        <InstrumentList onDataChange={setInstrumentData} />
+
+        {showMarkingTable && (
+          <Card
+            sx={{
+              p: 4,
+              mt: 4,
+              width: "100%",
+              border: "1px solid #cfcfcf",
+              boxShadow: "0px 3px 10px rgba(0,0,0,0.1)",
+              borderRadius: "12px",
+              background: "linear-gradient(to bottom, #fafafa, #ffffff)",
+            }}
+          >
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: "bold",
+                mb: 3,
+                textDecoration: "underline",
+                fontFamily: "Times New Roman",
+                color: "#0d47a1",
+              }}
+            >
+              Marking & Remarks
+            </Typography>
+
+            <Box sx={{ width: "100%" }}>
+              
+              {/* MARKING ON PACKAGE - Dynamic Data */}
+              <TableContainer
+                component={Paper}
+                elevation={3}
+                sx={{ borderRadius: 2, overflow: "hidden", border: "1px solid #bfbfbf" }}
+              >
+                <Table size="small" sx={{ width: "100%" }}>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell
+                        sx={{
+                          fontWeight: "bold",
+                          width: "25%",
+                          fontFamily: "Times New Roman",
+                          backgroundColor: "#e3f2fd",
+                          borderRight: "1px solid #bdbdbd",
+                          fontSize: "0.95rem",
+                        }}
+                      >
+                        Marking on Package
+                      </TableCell>
+
+                      <TableCell sx={{ fontFamily: "Times New Roman", fontSize: "0.9rem" }}>
+                        <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                          <Typography>Vendor : {form.vendor || ""}</Typography>
+                          <Typography>Part No : {form.partNumber || ""}</Typography>
+                          <Typography>PO No : {form.poNo || ""}</Typography>
+                          <Typography>MPN : {form.mpn || ""}</Typography>
+                          <Typography>Manufacture : {form.manufacture || ""}</Typography>
+                          <Typography>Date/Lot/Batch No : {form.batchNo || ""}</Typography>
+                          <Typography>Qty : {form.totalQty || ""}</Typography>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              <Box sx={{ mt: 4, p: 3, borderRadius: 2, backgroundColor: "#f7f9fc", border: "1px solid #e0e0e0" }}>
+                
+                {/* Marking on Material - Bound to State */}
+                <Box sx={{ mb: 3 }}>
+                  <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", color: "#1a237e" }}>
+                    Marking on Material :
+                  </Typography>
+                  <TextField
+                    fullWidth multiline rows={2} variant="outlined" sx={{ mt: 1 }}
+                    placeholder="Enter marking on material"
+                    value={common.markingOnMaterial}
+                    onChange={(e) => setCommon({...common, markingOnMaterial: e.target.value})}
+                  />
+                </Box>
+
+                {/* Dimensional Remark - Bound to State */}
+                <Box sx={{ mb: 3 }}>
+                  <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", color: "#1a237e" }}>
+                    Dimensional Remark :
+                  </Typography>
+                  <TextField
+                    fullWidth multiline rows={2} variant="outlined" sx={{ mt: 1 }}
+                    placeholder="NIL if empty"
+                    value={common.dimensionRemark}
+                    onChange={(e) => setCommon({...common, dimensionRemark: e.target.value})}
+                  />
+                </Box>
+
+                {/* Visual Inspection Remark - Bound to State */}
+                <Box>
+                  <Typography sx={{ fontWeight: "bold", fontFamily: "Times New Roman", color: "#1a237e" }}>
+                    Visual Inspection Remark :
+                  </Typography>
+                  <TextField
+                    fullWidth multiline rows={2} variant="outlined" sx={{ mt: 1 }}
+                    placeholder="NIL if empty"
+                    value={common.visualInspection}
+                    onChange={(e) => setCommon({...common, visualInspection: e.target.value})}
+                  />
+                </Box>
+
+              </Box>
+            </Box>
+          </Card>
+        )}
+
+        <Box sx={{ display: 'flex', justifyContent: 'center', pb: 2 }}>
+          <Button
+            variant="contained"
+            startIcon={<SaveIcon />}
+            onClick={handleSave}
+            disabled={isSaveDisabled()}
+            sx={{
+              px: 4, py: 1, background: "linear-gradient(135deg, #1976d2, #1565c0)", color: "white", fontWeight: "bold", borderRadius: "25px", boxShadow: "0 4px 12px rgba(25, 118, 210, 0.3)", textTransform: "none",
+              "&:hover": { background: "linear-gradient(135deg, #1565c0, #0d47a1)", boxShadow: "0 6px 16px rgba(25, 118, 210, 0.4)" },
+              "&:disabled": { background: "#e0e0e0", boxShadow: "none" }
+            }}
+          >
+            Save Inspection Data
+          </Button>
+        </Box>
+
+      </Stack>
+    </Grid>
+  );
+}
+
+export default PhysicalForm;
+
+```
