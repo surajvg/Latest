@@ -1,0 +1,117 @@
+
+Automation of GR to UD Process with Barcode/QR Code Integration
+
+1.0 GENERIC DESCRIPTION INFORMATION
+1.1 Purpose
+This document outlines the system functionality and technical requirements for automating the Goods Receipt (GR) to Usage Decision (UD) process using OCR and QR technology.
+1.3 Scope
+The system will extract data from supplier PDFs, validate it against SAP, generate QR codes, and automate GR/UD posting.
+1.3.1 System overview
+The system automates workflows by extracting invoice/PO info, generating QR codes for traceability, and auto-posting results into SAP via BAPI integrations.
+2.0 SYSTEM IDENTIFICATION AND OVERVIEW
+2.1 Product Perspective
+This automation tool sits between the Supplier's delivery documents and the SAP ERP system, serving as an integration layer for material receipt and quality inspection.
+2.2 Product Functions
+ * Document Extraction: Uses OCR to pull data from supplier invoices.
+ * QR Generation: Produces unique codes per material line item.
+ * SAP Posting: Automates GR and UD entries using standard BAPIs.
+ * Reporting: Provides real-time dashboards for process metrics.
+2.4 Constraints
+ * Document Quality: OCR accuracy depends on the clarity of the uploaded PDF.
+ * SAP Availability: System downtime will impact the ability to auto-post transactions.
+2.5 Assumptions and Dependencies
+ * Access: Assumes SAP credentials and BAPI access are provided.
+ * Hardware: Assumes users are trained on QR scanning devices and Zebra printers are available.
+3.0 FUNCTIONALITY OF THE SOFTWARE ITEM
+3.1 CSCI Requirements
+3.1.1 Functional Requirements
+ * Upload: System shall allow suppliers to upload invoice PDFs.
+ * Extraction: System shall extract PO number, quantity, and batch using OCR.
+ * Validation: Extracted data must be validated against SAP PO data.
+ * QR Handling: System shall generate and print scan-capable QR labels.
+4.0 REQUIREMENTS FOR INTERFACES TO THE SOFTWARE ITEM
+4.1 User Interface
+The system requires a web portal for document monitoring and a scan-based interface for inspection teams.
+4.2 Hardware Interface
+The system must interface with Zebra printers for label production and handheld/mobile devices for QR scanning.
+4.3 Software Interfaces
+Integration is required with the SAP ERP system using RFC or OData protocols.
+4.4 Communication Interfaces
+The system will use Email/SMS gateways for automated notifications regarding approvals and rejections.
+6.0 SAFETY SPECIFICATIONS
+(Not explicitly detailed in the source, typically refers to operational safety and hardware handling).
+7.0 SECURITY AND PRIVACY SPECIFICATIONS
+ * Encryption: Data must use AES-256 at rest and TLS 1.2 in transit.
+ * Access Control: Role-based access control (RBAC) and JWT authentication are required.
+ * Logging: All activities must be logged with timestamps for audit purposes.
+8.0 HUMAN-FACTORS ENGINEERING REQUIREMENTS
+8.1 Manual operations
+The system replaces manual PDF uploads and hand-typed data entry. Manual physical inspection results are recorded digitally via QR scans instead of paper-based logs.
+
+
+
+8.2 Human-equipment interactions
+The system requires physical interaction with Zebra Printers for label generation and handheld or mobile scanners for material verification and quality inspection. Users must be trained on these specific hardware devices to ensure seamless data capture.
+8.3 Constraints on personnel
+Successful operation assumes that the Store/Inspection Team and Indentors are proficient in using the web-based UI and scanning hardware. SAP Basis and IT support must be available to maintain RFC connectivity and user access permissions.
+8.4 Areas that are sensitive to human errors and training
+ * Document Clarity: OCR accuracy is heavily dependent on the quality of supplier-provided PDFs.
+ * Manual Overrides: QR regeneration and exception handling are role-restricted to prevent unauthorized data tampering.
+ * Label Management: Physical damage to labels requires a standardized process for regeneration.
+9.0 DATA DEFINITION AND DATABASE REQUIREMENTS
+The system utilizes a PostgreSQL or SQLite database to store transactional mappings between Purchase Orders (PO), Goods Receipts (GR), and QR codes.
+ * Encrypted Fields: QR codes contain encrypted PO, GR, batch, and material data.
+ * Mandatory Fields: The system validates extracted PO number, quantity, and supplier name against SAP records.
+10.0 INSTALLATION REQUIREMENTS AT OPERATION SITE(S)
+Operations require connectivity to the SAP ERP system via RFC or OData. On-site hardware must include Zebra-compatible label printers and network access for mobile/handheld scanning devices.
+11.0 INSTALLATION REQUIREMENTS AT MAINTENANCE SITE(S)
+The backend environment requires a Python/Flask runtime and an OCR engine (Tesseract or AWS Textract). The system is compatible with both cloud and on-premise deployments.
+12.0 USER DOCUMENTATION REQUIREMENTS
+Documentation must cover:
+ * Supplier portal upload procedures.
+ * Indentor and Inspection Team scanning workflows.
+ * Dashboard navigation for real-time GR/UD metrics.
+13.0 USER OPERATION AND EXECUTION REQUIREMENTS
+Users execute the process through a React.js web portal. The workflow transitions from document upload to automated GR posting via BAPI_GOODSMVT_CREATE, followed by scan-based quality results recording.
+14.0 USER MAINTENANCE REQUIREMENTS
+Administrators must manage Role-Based Access Control (RBAC) via JWT authentication. Maintenance includes monitoring the audit trail for OCR failures and SAP API retry logs.
+15.0 PERFORMANCE REQUIREMENTS
+ * OCR Extraction: Completed within 10 seconds.
+ * UI Response: Dashboard refresh rate ≤ 3 seconds.
+ * SAP Integration: API response within 5 seconds.
+16.0 NON-FUNCTIONAL REQUIREMENTS (SOFTWARE QUALITY CHARACTERISTICS)
+ * Security: AES-256 encryption at rest and TLS 1.2 in transit.
+ * Reliability: System uptime ≥ 99% with auto-retry on failed API calls.
+ * Usability: QR scanning must require ≤ 2 clicks.
+17.0 DESIGN AND IMPLEMENTATION CONSTRAINTS
+ * Integration: Must use specific SAP BAPIs (BAPI_INSPOPER_RECORDRESULTS, BAPI_INSPLOT_SETUSAGEDECISION).
+ * Out of Scope: Material returns and vendor portal integration are excluded from the current phase.
+18.0 COMPUTER RESOURCE REQUIREMENTS
+18.1 Computer Hardware Requirements
+ * Zebra Label Printers.
+ * Handheld/Mobile QR Scanners.
+18.2 Computer Hardware Resource Utilization Requirements
+The system must support high-volume transaction processing as supplier count scales.
+18.3 Computer Software Requirements
+ * Frontend: React.js.
+ * Backend: Flask (Python).
+ * Database: PostgreSQL / SQLite.
+18.4 Computer Communications Requirements
+Integration via RFC or OData for SAP connectivity and TLS 1.2 for secure data transit.
+19.0 PACKAGING REQUIREMENTS
+Deployment packages must include the Flask backend, React frontend assets, and necessary database schema scripts for PostgreSQL/SQLite.
+20.0 PRECEDENCE AND CRITICALITY OF REQUIREMENTS
+Automated GR and UD posting are the highest priority. Dashboard reporting and supplier performance tracking are secondary objectives.
+21.0 REQUIREMENT TRACEABILITY
+The system logs all activities for auditability, maintaining a direct mapping of PO → GR → QR → UD.
+22.0 RATIONALE
+The current manual process suffers from high error rates and lack of traceability. Automation via OCR and QR codes eliminates spreadsheet-based tracking and improves processing speed.
+23.0 QUALITY ASSURANCE REQUIREMENTS
+The QA Team is responsible for performing system and integration testing, specifically validating BAPI response handling and OCR accuracy.
+24.0 GLOSSARY
+| Term | Meaning |
+|---|---|
+| BAPI | Business Application Programming Interface |
+| GR | Goods Receipt |
+| OCR | Optical Character Recognition |
+| UD | Usage Decision |
